@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#e31837">
+  <title>7-Eyes | Camera Barcode Test</title>
+  <style>
+    :root { color-scheme: light; --red:#e31837; --green:#00843d; --ink:#202124; --muted:#687078; --line:#e4e7eb; }
+    * { box-sizing:border-box }
+    body { margin:0; background:#f5f6f7; color:var(--ink); font:16px Arial,sans-serif; }
+    header { background:var(--red); color:#fff; padding:16px 18px; }
+    header strong { display:block; font-size:19px; letter-spacing:.2px }
+    header span { display:block; margin-top:4px; font-size:13px; opacity:.92 }
+    main { max-width:680px; margin:0 auto; padding:16px; }
+    .panel { background:#fff; border:1px solid var(--line); border-radius:14px; padding:14px; margin-bottom:14px; box-shadow:0 2px 8px #00000008; }
+    .camera-wrap { position:relative; overflow:hidden; background:#111; border-radius:12px; min-height:230px; aspect-ratio:4/3; display:grid; place-items:center; }
+    video { width:100%; height:100%; object-fit:cover; display:block; }
+    .placeholder { position:absolute; color:#fff; text-align:center; padding:20px; font-size:14px; line-height:1.5; pointer-events:none; }
+    .scan-line { position:absolute; left:9%; right:9%; top:50%; height:2px; background:#e31837; box-shadow:0 0 8px #e31837; pointer-events:none; opacity:.85; }
+    .controls { display:grid; grid-template-columns:1fr 1fr; gap:9px; margin-top:12px; }
+    button, select, input { font:inherit; border-radius:10px; min-height:46px; }
+    button { border:0; padding:10px 14px; font-weight:700; cursor:pointer; }
+    button:disabled { opacity:.45; cursor:not-allowed }
+    .primary { background:var(--red); color:#fff; }
+    .secondary { background:#eef0f2; color:#202124; }
+    .full { grid-column:1/-1 }
+    label { display:block; color:var(--muted); font-size:13px; margin:0 0 7px; }
+    select, input { width:100%; border:1px solid var(--line); padding:10px 12px; background:#fff; color:var(--ink); }
+    .result { font-size:26px; font-weight:700; letter-spacing:.5px; overflow-wrap:anywhere; margin:7px 0; }
+    .status { color:var(--muted); font-size:13px; line-height:1.45; margin-top:9px; min-height:18px; }
+    .result-empty { color:#9aa0a6; font-size:16px; font-weight:400; }
+    .history { list-style:none; margin:8px 0 0; padding:0; }
+    .history li { display:flex; justify-content:space-between; gap:10px; padding:10px 0; border-top:1px solid var(--line); font-size:14px; }
+    .history code { overflow-wrap:anywhere; font:600 14px Arial,sans-serif; }
+    .history small { color:var(--muted); white-space:nowrap; }
+    .note { color:var(--muted); font-size:12px; line-height:1.5; }
+    @media (max-width:380px) { main {padding:11px} .panel {padding:11px} }
+  </style>
+</head>
+<body>
+<header>
+  <strong>7-Eyes | Camera Barcode Test</strong>
+  <span>Bản thử nghiệm độc lập · Chưa kết nối Google Sheets</span>
+</header>
+<main>
+  <section class="panel">
+    <div class="camera-wrap">
+      <video id="video" muted playsinline></video>
+      <div id="placeholder" class="placeholder">Nhấn “Mở camera” và cấp quyền truy cập camera.</div>
+      <div class="scan-line"></div>
+    </div>
+    <div style="margin-top:13px">
+      <label for="cameraSelect">Camera sử dụng</label>
+      <select id="cameraSelect"><option value="">Tự động chọn camera sau</option></select>
+    </div>
+    <div class="controls">
+      <button id="startBtn" class="primary">Mở camera</button>
+      <button id="stopBtn" class="secondary" disabled>Tắt camera</button>
+      <button id="switchBtn" class="secondary full" disabled>Đổi camera</button>
+    </div>
+    <div id="status" class="status" role="status">Chưa mở camera.</div>
+  </section>
+
+  <section class="panel">
+    <label>Mã barcode nhận được gần nhất</label>
+    <div id="lastCode" class="result result-empty">Chưa có mã</div>
+    <div class="controls">
+      <button id="copyBtn" class="secondary" disabled>Sao chép mã</button>
+      <button id="clearBtn" class="secondary">Xóa kết quả</button>
+    </div>
+  </section>
+
+  <section class="panel">
+    <label for="manualCode">Kiểm tra nhập mã thủ công (đối chiếu khi cần)</label>
+    <div class="controls" style="grid-template-columns:1fr auto">
+      <input id="manualCode" inputmode="numeric" autocomplete="off" placeholder="Nhập barcode">
+      <button id="addManualBtn" class="secondary">Thêm</button>
+    </div>
+    <label style="margin-top:14px">Lịch sử quét trong phiên này</label>
+    <ul id="history" class="history"><li class="note">Chưa có dữ liệu.</li></ul>
+    <p class="note">Mỗi mã chỉ được ghi nhận một lần trong 1,5 giây để hạn chế quét lặp liên tục. Dữ liệu chỉ nằm trong phiên trình duyệt, tải lại trang sẽ xóa.</p>
+  </section>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"></script>
+<script>
+(() => {
+  const video = document.getElementById('video');
+  const cameraSelect = document.getElementById('cameraSelect');
+  const startBtn = document.getElementById('startBtn');
+  const stopBtn = document.getElementById('stopBtn');
+  const switchBtn = document.getElementById('switchBtn');
+  const statusEl = document.getElementById('status');
+  const placeholder = document.getElementById('placeholder');
+  const lastCode = document.getElementById('lastCode');
+  const copyBtn = document.getElementById('copyBtn');
+  const historyEl = document.getElementById('history');
+  const manualCode = document.getElementById('manualCode');
+  let reader = null;
+  let controls = null;
+  let cameras = [];
+  let currentIndex = 0;
+  let lastSeen = new Map();
+  let latest = '';
+
+  function status(message) { statusEl.textContent = message; }
+  function setLatest(code, source) {
+    const now = Date.now();
+    if (!code || (lastSeen.has(code) && now - lastSeen.get(code) < 1500)) return;
+    lastSeen.set(code, now);
+    latest = code;
+    lastCode.textContent = code;
+    lastCode.classList.remove('result-empty');
+    copyBtn.disabled = false;
+    const li = document.createElement('li');
+    const codeEl = document.createElement('code');
+    codeEl.textContent = code;
+    const meta = document.createElement('small');
+    meta.textContent = new Date().toLocaleTimeString('vi-VN') + ' · ' + source;
+    li.append(codeEl, meta);
+    if (historyEl.querySelector('.note')) historyEl.innerHTML = '';
+    historyEl.prepend(li);
+    status('Đã nhận barcode. Có thể đưa sản phẩm tiếp theo vào khung hình.');
+    if (navigator.vibrate) navigator.vibrate(60);
+  }
+  async function loadCameras() {
+    try {
+      cameras = await ZXing.BrowserCodeReader.listVideoInputDevices();
+      cameraSelect.innerHTML = '';
+      cameras.forEach((camera, index) => {
+        const option = document.createElement('option');
+        option.value = camera.deviceId;
+        option.textContent = camera.label || ('Camera ' + (index + 1));
+        cameraSelect.appendChild(option);
+      });
+      if (cameras.length) {
+        const rear = cameras.findIndex(c => /back|rear|environment|sau/i.test(c.label));
+        currentIndex = rear >= 0 ? rear : Math.max(0, cameras.length - 1);
+        cameraSelect.value = cameras[currentIndex].deviceId;
+      }
+      switchBtn.disabled = cameras.length < 2;
+      return cameras;
+    } catch (e) {
+      status('Không lấy được danh sách camera: ' + e.message);
+      return [];
+    }
+  }
+  async function startCamera(deviceId) {
+    if (!window.isSecureContext) {
+      status('Trang chưa chạy trên HTTPS. Camera chỉ hoạt động trên HTTPS hoặc localhost.');
+      return;
+    }
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      status('Trình duyệt này không hỗ trợ API camera. Hãy thử Chrome trên Android hoặc Safari trên iPhone.');
+      return;
+    }
+    if (!window.ZXing || !ZXing.BrowserMultiFormatReader) {
+      status('Không tải được thư viện quét barcode. Kiểm tra kết nối Internet rồi tải lại trang.');
+      return;
+    }
+    await stopCamera(false);
+    placeholder.style.display = 'none';
+    status('Đang yêu cầu quyền camera…');
+    try {
+      reader = new ZXing.BrowserMultiFormatReader(undefined, 250);
+      controls = await reader.decodeFromVideoDevice(deviceId || undefined, video, (result, err) => {
+        if (result) setLatest(result.getText(), 'Camera');
+      });
+      await loadCameras();
+      if (deviceId) cameraSelect.value = deviceId;
+      status('Camera đang hoạt động. Đưa barcode vào giữa khung hình, giữ máy ổn định và đủ sáng.');
+      startBtn.disabled = true;
+      stopBtn.disabled = false;
+      switchBtn.disabled = cameras.length < 2;
+    } catch (e) {
+      placeholder.style.display = 'block';
+      const msg = e && e.name === 'NotAllowedError'
+        ? 'Bạn chưa cấp quyền camera. Hãy cho phép Camera trong cài đặt trình duyệt rồi thử lại.'
+        : e && e.name === 'NotFoundError'
+        ? 'Không tìm thấy camera trên thiết bị.'
+        : 'Không mở được camera: ' + (e.message || e);
+      status(msg);
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+    }
+  }
+  async function stopCamera(showStatus = true) {
+    try { if (controls && controls.stop) controls.stop(); } catch (_) {}
+    try { if (reader && reader.reset) reader.reset(); } catch (_) {}
+    controls = null;
+    reader = null;
+    if (video.srcObject) {
+      video.srcObject.getTracks().forEach(track => track.stop());
+      video.srcObject = null;
+    }
+    startBtn.disabled = false;
+    stopBtn.disabled = true;
+    if (showStatus) {
+      placeholder.style.display = 'block';
+      status('Đã tắt camera.');
+    }
+  }
+  startBtn.addEventListener('click', () => startCamera(cameraSelect.value || undefined));
+  stopBtn.addEventListener('click', () => stopCamera());
+  cameraSelect.addEventListener('change', () => {
+    if (!startBtn.disabled) return;
+    startCamera(cameraSelect.value);
+  });
+  switchBtn.addEventListener('click', async () => {
+    if (!cameras.length) return;
+    currentIndex = (currentIndex + 1) % cameras.length;
+    cameraSelect.value = cameras[currentIndex].deviceId;
+    await startCamera(cameraSelect.value);
+  });
+  copyBtn.addEventListener('click', async () => {
+    if (!latest) return;
+    try { await navigator.clipboard.writeText(latest); status('Đã sao chép barcode.'); }
+    catch (_) { status('Không thể sao chép tự động trên trình duyệt này.'); }
+  });
+  document.getElementById('clearBtn').addEventListener('click', () => {
+    latest = '';
+    lastSeen.clear();
+    lastCode.textContent = 'Chưa có mã';
+    lastCode.classList.add('result-empty');
+    copyBtn.disabled = true;
+    historyEl.innerHTML = '<li class="note">Chưa có dữ liệu.</li>';
+    status('Đã xóa kết quả trong phiên.');
+  });
+  document.getElementById('addManualBtn').addEventListener('click', () => {
+    const code = manualCode.value.trim();
+    if (code) { setLatest(code, 'Nhập tay'); manualCode.value = ''; }
+  });
+  manualCode.addEventListener('keydown', e => {
+    if (e.key === 'Enter') document.getElementById('addManualBtn').click();
+  });
+  window.addEventListener('pagehide', () => stopCamera(false));
+})();
+</script>
+</body>
+</html>
